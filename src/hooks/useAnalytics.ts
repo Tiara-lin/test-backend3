@@ -8,7 +8,8 @@ export const API_BASE_URL = 'https://test-backend3-production.up.railway.app/api
 let sessionId: string | null = null;
 
 interface AnalyticsHook {
-  trackSession: () => Promise<void>;
+  trackSession: () => Promise<string | null>;
+  ensureSession: () => Promise<void>;
   trackInteraction: (
     actionType: string,
     postId?: string,
@@ -27,18 +28,30 @@ interface AnalyticsHook {
 export const useAnalytics = (): AnalyticsHook => {
   const sessionTracked = useRef(false);
 
-  const trackSession = async () => {
-    if (sessionTracked.current) return;
+  const trackSession = async (): Promise<string | null> => {
+    if (sessionTracked.current && sessionId) {
+      return sessionId;
+    }
+
+    const savedSession = sessionStorage.getItem('session_id');
+    if (savedSession) {
+      sessionId = savedSession;
+    }
 
     try {
       const response = await axios.post(`${API_BASE_URL}/track/session`, {
-        page_url: window.location.href
+        page_url: window.location.href,
+        session_id: sessionId || null
       });
 
       if (response.data.success) {
         sessionId = response.data.session_id;
-        // ✅ 全域也掛上
-        (window as any).sessionId = sessionId;
+
+        // ✅ 保證只有在 sessionId 是字串時才 set
+        if (sessionId) {
+          sessionStorage.setItem('session_id', sessionId);
+          (window as any).sessionId = sessionId;
+        }
 
         sessionTracked.current = true;
         console.log('✅ Session tracked:', sessionId);
@@ -46,6 +59,8 @@ export const useAnalytics = (): AnalyticsHook => {
     } catch (error) {
       console.error('❌ Session tracking failed:', error);
     }
+
+    return sessionId;
   };
 
   const ensureSession = async () => {
@@ -73,7 +88,10 @@ export const useAnalytics = (): AnalyticsHook => {
     if (!actionType) return;
 
     await ensureSession();
-    if (!sessionId) return;
+    if (!sessionId) {
+      console.warn(`⚠️ Interaction skipped, no session_id: ${actionType}`);
+      return;
+    }
 
     try {
       await axios.post(`${API_BASE_URL}/track/interaction`, {
@@ -98,7 +116,10 @@ export const useAnalytics = (): AnalyticsHook => {
     mediaType: 'image' | 'video'
   ) => {
     await ensureSession();
-    if (!sessionId) return;
+    if (!sessionId) {
+      console.warn('⚠️ Post view skipped, no session_id');
+      return;
+    }
 
     try {
       await axios.post(`${API_BASE_URL}/track/post-view`, {
@@ -122,6 +143,7 @@ export const useAnalytics = (): AnalyticsHook => {
 
   return {
     trackSession,
+    ensureSession,
     trackInteraction,
     trackPostView
   };
